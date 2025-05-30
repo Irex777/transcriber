@@ -1,10 +1,23 @@
 import sys
 import json
 import subprocess
+import os
 import argparse # Import argparse
 
 def main():
+    # Add Homebrew bin to PATH (if installed)
+    homebrew_bin = "/opt/homebrew/bin"
+    if os.path.exists(homebrew_bin):
+        os.environ["PATH"] = homebrew_bin + ":" + os.environ["PATH"]
+        print(f"Added {homebrew_bin} to PATH", file=sys.stderr)
+    
     print(f"Using Python interpreter: {sys.executable}", flush=True)
+    
+    # Additional system diagnostics
+    import platform
+    print(f"System: {platform.system()} {platform.release()}", flush=True)
+    print(f"Machine: {platform.machine()}", flush=True)
+    print(f"Python implementation: {platform.python_implementation()}", flush=True)
 
     # Setup argument parser
     parser = argparse.ArgumentParser(description="Transcribe audio using faster-whisper.")
@@ -26,8 +39,68 @@ def main():
         from faster_whisper import WhisperModel
     except ImportError:
         print("Installing required dependencies...", file=sys.stderr)
+        
+        # Diagnostic checks for system dependencies
+        print("=== DIAGNOSTIC: Checking system dependencies ===", file=sys.stderr)
+        # Check for pkg-config
+        try:
+            result = subprocess.run(["pkg-config", "--version"], capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"✓ pkg-config found: {result.stdout.strip()}", file=sys.stderr)
+            else:
+                print("✗ pkg-config command failed", file=sys.stderr)
+        except FileNotFoundError:
+            print("✗ pkg-config NOT FOUND - this is required for building PyAV", file=sys.stderr)
+            print("  Install with: brew install pkg-config", file=sys.stderr)
+        
+        # Check for FFmpeg
+        try:
+            result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+            if result.returncode == 0:
+                print("✓ FFmpeg found", file=sys.stderr)
+            else:
+                print("✗ FFmpeg command failed", file=sys.stderr)
+        except FileNotFoundError:
+            print("✗ FFmpeg NOT FOUND - this may be required for PyAV", file=sys.stderr)
+            print("  Install with: brew install ffmpeg", file=sys.stderr)
+        
+        # Check for Xcode Command Line Tools
+        try:
+            result = subprocess.run(["xcode-select", "--print-path"], capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"✓ Xcode Command Line Tools found: {result.stdout.strip()}", file=sys.stderr)
+            else:
+                print("✗ Xcode Command Line Tools may not be properly configured", file=sys.stderr)
+        except FileNotFoundError:
+            print("✗ Xcode Command Line Tools NOT FOUND", file=sys.stderr)
+            print("  Install with: xcode-select --install", file=sys.stderr)
+        
+        # Check Python and pip versions
+        print(f"✓ Python version: {sys.version}", file=sys.stderr)
+        try:
+            result = subprocess.run([sys.executable, "-m", "pip", "--version"], capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"✓ pip version: {result.stdout.strip()}", file=sys.stderr)
+        except Exception as e:
+            print(f"✗ pip check failed: {e}", file=sys.stderr)
+        
+        print("=== END DIAGNOSTIC ===", file=sys.stderr)
+        
+        # Check if critical dependencies are missing
+        pkg_config_missing = False
+        try:
+            subprocess.run(["pkg-config", "--version"], capture_output=True, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pkg_config_missing = True
+        
+        if pkg_config_missing:
+            print("ERROR: pkg-config is required but not found.", file=sys.stderr)
+            print("Please install it first: brew install pkg-config", file=sys.stderr)
+            print("You may also need: brew install ffmpeg", file=sys.stderr)
+            sys.exit(1)
+        
         # Install both faster-whisper and huggingface_hub with hf_xet
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper", "huggingface_hub[hf_xet]"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper", "huggingface_hub[hf_xet]", "--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org"])
         from faster_whisper import WhisperModel
 
     print("Initializing Whisper model...", flush=True)
@@ -124,7 +197,6 @@ def main():
 
     try:
         import tempfile
-        import os
         import shutil
 
         # Write to a temporary file first
