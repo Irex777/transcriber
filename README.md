@@ -40,29 +40,68 @@ Transcriber is an Electron-based application for converting speech to text using
 
 - Node.js (v18+)
 - Python 3.9+
-- FFmpeg (for audio processing)
+- Homebrew (for macOS dependency management)
 - System Requirements:
   - 4GB RAM minimum (8GB recommended)
   - 2GB disk space for models
 
 ## Installation
 
-1. Clone the repository:
+### macOS Setup
+
+1. **Install system dependencies using Homebrew:**
+```bash
+# Install pkg-config (required for PyAV compilation)
+brew install pkg-config
+
+# Install FFmpeg (required for audio processing)
+brew install ffmpeg
+```
+
+2. **Clone the repository:**
 ```bash
 git clone https://github.com/yourusername/transcriber.git
 cd transcriber
 ```
 
-2. Install dependencies:
+3. **Install Node.js dependencies:**
 ```bash
 npm install
 ```
 
-3. Set up Python environment:
+4. **Set up Python environment:**
 ```bash
-cd Transcriber/python_env
-pip install faster-whisper huggingface_hub[hf_xet]
+# Navigate to Python environment directory
+cd python_env
+
+# Install Python dependencies (PyAV requires pkg-config and FFmpeg)
+pip install faster-whisper huggingface_hub[hf_xet] av
+
+# Verify PyAV installation
+python -c "import av; print('PyAV successfully installed')"
 ```
+
+5. **Verify installation:**
+```bash
+# Test transcription functionality
+python transcribe.py --help
+
+# Return to project root
+cd ..
+```
+
+### Troubleshooting
+
+If you encounter issues during installation:
+
+- **PyAV compilation errors**: Ensure pkg-config and FFmpeg are installed via Homebrew
+- **Python dependency conflicts**: Consider using a virtual environment:
+  ```bash
+  python -m venv transcriber-env
+  source transcriber-env/bin/activate  # On macOS/Linux
+  pip install faster-whisper huggingface_hub[hf_xet] av
+  ```
+- **FFmpeg not found**: Verify FFmpeg installation with `ffmpeg -version`
 
 ## Usage
 
