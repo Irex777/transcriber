@@ -274,7 +274,7 @@ app.whenReady().then(() => {
   });
   const sdkFlagPath = path.join(process.env.APP_ROOT, ".sdk_installed");
   if (!fs.existsSync(sdkFlagPath)) {
-    const pythonExec = path.join(process.env.APP_ROOT, "python_env", "python");
+    const pythonExec = "python3";
     const bootstrapScript = path.join(
       process.env.APP_ROOT,
       // Added non-null assertion
@@ -311,7 +311,7 @@ async function processNextJob() {
   }
   const { jobId, filePath, outputPath, language, quality, speakerSensitivity, event } = job;
   console.log(`[Queue] Starting job ${jobId} for file: ${filePath}`);
-  const pythonExec = path.join(process.env.APP_ROOT, "python_env", "python");
+  const pythonExec = "python3";
   const transcribeScript = path.join(
     process.env.APP_ROOT,
     "python_env",
@@ -395,7 +395,7 @@ ipcMain.handle("process-with-gemini", async (_event, { jobId, transcriptPath, ap
       throw new Error("Gemini API key was not provided");
     }
     const geminiOutputPath = transcriptPath.replace(".json", "_gemini.json");
-    const pythonExec = path.join(process.env.APP_ROOT, "python_env", "python");
+    const pythonExec = "python3";
     const geminiScript = path.join(process.env.APP_ROOT, "python_env", "gemini_process.py");
     return new Promise((resolve, reject) => {
       const proc = spawn(pythonExec, [
