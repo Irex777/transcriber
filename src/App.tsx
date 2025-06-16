@@ -425,6 +425,7 @@ const [speakerSensitivity, setSpeakerSensitivity] = useState<number>(0.5); // De
 
   // Save completed jobs to localStorage whenever they change
 
+
   // Save completed jobs to localStorage
   useEffect(() => {
     const completedJobs = jobs.filter(job => 
@@ -454,11 +455,14 @@ const [speakerSensitivity, setSpeakerSensitivity] = useState<number>(0.5); // De
           job.status === 'Completed' && job.transcript
         );
         
-        setJobs(prev => {
-          // Combine saved jobs with any current non-completed jobs
+setJobs(prev => {
+          // Combine saved jobs with any current non-completed jobs, avoiding duplicates
           const currentActiveJobs = prev.filter(job => job.status !== 'Completed');
-          return [...currentActiveJobs, ...validJobs];
+          const existingJobIds = new Set(currentActiveJobs.map(job => job.id));
+          const uniqueValidJobs = validJobs.filter((job: Job) => !existingJobIds.has(job.id));
+          return [...currentActiveJobs, ...uniqueValidJobs];
         });
+        
       }
     } catch (error) {
       console.error('[Storage] Failed to load jobs from localStorage:', error);
@@ -1157,13 +1161,13 @@ const handleTranscriptEdit = (jobId: string, segmentIndex: number, field: 'speak
                     // Determine output path based on save mode
                     const outputPath = trimControls.saveMode === 'new'
                       ? (() => {
-                          const ext = selectedJob.filePath.split('.').pop();
-                          const timestamp = new Date().getTime();
-                          return selectedJob.filePath.replace(
-                            `.${ext}`,
-                            `_trim_${timestamp}.${ext}`
-                          );
-                        })()
+                           const ext = selectedJob.filePath.split('.').pop();
+                           const timestamp = new Date().getTime();
+                           return selectedJob.filePath.replace(
+                             `.${ext}`,
+                             `_trim_${timestamp}.${ext}`
+                           );
+                         })()
                       : selectedJob.filePath;
 
                     try {
@@ -1305,7 +1309,7 @@ const handleTranscriptEdit = (jobId: string, segmentIndex: number, field: 'speak
                 };
 
                 return (
-                  <React.Fragment key={`${selectedJob?.id}-${idx}`}>
+                  <React.Fragment key={`${selectedJob.id}-${idx}-${seg.start}-${seg.end}`}>
                     <div className={`segment ${isSegmentPlaying ? 'playing' : ''}`}>
                       <button
                         className="play-button"

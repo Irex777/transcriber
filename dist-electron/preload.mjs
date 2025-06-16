@@ -10,12 +10,12 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     return electron.ipcRenderer.off(channel, ...omit);
   },
   send(...args) {
-    const [channel, ...omit] = args;
-    return electron.ipcRenderer.send(channel, ...omit);
+    const [channel, ...data] = args;
+    return electron.ipcRenderer.send(channel, ...data);
   },
   invoke(...args) {
-    const [channel, ...omit] = args;
-    return electron.ipcRenderer.invoke(channel, ...omit);
+    const [channel, ...data] = args;
+    return electron.ipcRenderer.invoke(channel, ...data);
   },
   // Function to check if a file exists
   fileExists: (filePath) => {
@@ -42,5 +42,15 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   },
   readFromClipboard: () => {
     return electron.ipcRenderer.invoke("read-from-clipboard");
+  },
+  // File cleanup functions
+  cleanupJobFiles: (jobId) => {
+    return electron.ipcRenderer.invoke("cleanup-job-files", jobId);
+  },
+  cleanupAllFiles: () => {
+    return electron.ipcRenderer.invoke("cleanup-all-files");
+  },
+  getFileStats: (jobId) => {
+    return electron.ipcRenderer.invoke("get-file-stats", jobId);
   }
 });

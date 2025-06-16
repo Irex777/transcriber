@@ -93,8 +93,16 @@ function transcodeToMp3(inputPath, outputPath) {
     });
   });
 }
-ipcMain.handle("trim-audio", async (_event, { inputPath, outputPath, start, end }) => {
+ipcMain.handle("trim-audio", async (_event, { inputPath, outputPath, start, end, jobId }) => {
   try {
+    if (jobId) {
+      await trackFile(
+        jobId,
+        outputPath,
+        "trimmed"
+        /* TRIMMED */
+      );
+    }
     await trimAudio(inputPath, outputPath, start, end);
     return { success: true, outputPath };
   } catch (error) {
@@ -105,8 +113,16 @@ ipcMain.handle("trim-audio", async (_event, { inputPath, outputPath, start, end 
     };
   }
 });
-ipcMain.handle("transcode-to-mp3", async (_event, { inputPath, outputPath }) => {
+ipcMain.handle("transcode-to-mp3", async (_event, { inputPath, outputPath, jobId }) => {
   try {
+    if (jobId) {
+      await trackFile(
+        jobId,
+        outputPath,
+        "converted"
+        /* CONVERTED */
+      );
+    }
     await transcodeToMp3(inputPath, outputPath);
     return { success: true, outputPath };
   } catch (error) {
@@ -189,6 +205,62 @@ function createWindow() {
     } catch {
       return false;
     }
+    ipcMain.handle("cleanup-job-files", async (_event2, jobId) => {
+      console.log(`[Main] Cleanup request for job: ${jobId}`);
+      try {
+        const result = await cleanupJobFiles(jobId);
+        return result;
+      } catch (error) {
+        console.error(`[Main] Error during job cleanup:`, error);
+        return {
+          success: false,
+          deletedFiles: [],
+          errors: [error instanceof Error ? error.message : "Unknown error occurred"]
+        };
+      }
+    });
+    ipcMain.handle("cleanup-all-files", async (_event2) => {
+      console.log(`[Main] Cleanup request for all jobs`);
+      try {
+        const result = await cleanupAllFiles();
+        return result;
+      } catch (error) {
+        console.error(`[Main] Error during global cleanup:`, error);
+        return {
+          success: false,
+          totalDeleted: 0,
+          errors: [error instanceof Error ? error.message : "Unknown error occurred"]
+        };
+      }
+    });
+    ipcMain.handle("get-file-stats", async (_event2, jobId) => {
+      console.log(`[Main] File stats request for job: ${jobId || "all"}`);
+      try {
+        if (jobId) {
+          const files = jobFileRegistry.get(jobId) || [];
+          const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
+          return {
+            fileCount: files.length,
+            totalSize,
+            files: files.map((f) => ({ path: f.path, type: f.type, size: f.size }))
+          };
+        } else {
+          let totalFiles = 0;
+          let totalSize = 0;
+          const jobStats = {};
+          for (const [id, files] of jobFileRegistry.entries()) {
+            const jobSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
+            totalFiles += files.length;
+            totalSize += jobSize;
+            jobStats[id] = { fileCount: files.length, totalSize: jobSize };
+          }
+          return { totalFiles, totalSize, jobStats };
+        }
+      } catch (error) {
+        console.error(`[Main] Error getting file stats:`, error);
+        return { error: error instanceof Error ? error.message : "Unknown error occurred" };
+      }
+    });
   });
 }
 app.on("window-all-closed", () => {
@@ -274,7 +346,7 @@ app.whenReady().then(() => {
   });
   const sdkFlagPath = path.join(process.env.APP_ROOT, ".sdk_installed");
   if (!fs.existsSync(sdkFlagPath)) {
-    const pythonExec = "python3";
+    const pythonExec = "bash";
     const bootstrapScript = path.join(
       process.env.APP_ROOT,
       // Added non-null assertion
@@ -296,6 +368,74 @@ app.whenReady().then(() => {
   }
   createWindow();
 });
+async function trackFile(jobId, filePath, type) {
+  console.log(`[FileTracker] Tracking ${type} file for job ${jobId}: ${filePath}`);
+  try {
+    const stats = await fs.promises.stat(filePath);
+    const trackedFile = {
+      path: filePath,
+      type,
+      createdAt: Date.now(),
+      size: stats.size
+    };
+    if (!jobFileRegistry.has(jobId)) {
+      jobFileRegistry.set(jobId, []);
+    }
+    jobFileRegistry.get(jobId).push(trackedFile);
+    console.log(`[FileTracker] Successfully tracked ${type} file: ${filePath} (${stats.size} bytes)`);
+  } catch (error) {
+    console.error(`[FileTracker] Error tracking file ${filePath}:`, error);
+  }
+}
+async function cleanupJobFiles(jobId) {
+  console.log(`[FileCleanup] Starting cleanup for job ${jobId}`);
+  const deletedFiles = [];
+  const errors = [];
+  const trackedFiles = jobFileRegistry.get(jobId) || [];
+  for (const file of trackedFiles) {
+    if (file.type === "original") {
+      console.log(`[FileCleanup] Skipping original file: ${file.path}`);
+      continue;
+    }
+    try {
+      if (await fs.promises.access(file.path).then(() => true).catch(() => false)) {
+        await fs.promises.unlink(file.path);
+        deletedFiles.push(file.path);
+        console.log(`[FileCleanup] Deleted ${file.type} file: ${file.path}`);
+      } else {
+        console.log(`[FileCleanup] File already deleted or doesn't exist: ${file.path}`);
+      }
+    } catch (error) {
+      const errorMsg = `Failed to delete ${file.path}: ${error instanceof Error ? error.message : "Unknown error"}`;
+      errors.push(errorMsg);
+      console.error(`[FileCleanup] ${errorMsg}`);
+    }
+  }
+  jobFileRegistry.delete(jobId);
+  console.log(`[FileCleanup] Cleanup complete for job ${jobId}. Deleted: ${deletedFiles.length}, Errors: ${errors.length}`);
+  return {
+    success: errors.length === 0,
+    deletedFiles,
+    errors
+  };
+}
+async function cleanupAllFiles() {
+  console.log(`[FileCleanup] Starting cleanup for all jobs`);
+  let totalDeleted = 0;
+  const allErrors = [];
+  for (const jobId of jobFileRegistry.keys()) {
+    const result = await cleanupJobFiles(jobId);
+    totalDeleted += result.deletedFiles.length;
+    allErrors.push(...result.errors);
+  }
+  console.log(`[FileCleanup] Global cleanup complete. Total deleted: ${totalDeleted}, Total errors: ${allErrors.length}`);
+  return {
+    success: allErrors.length === 0,
+    totalDeleted,
+    errors: allErrors
+  };
+}
+const jobFileRegistry = /* @__PURE__ */ new Map();
 const jobQueue = [];
 let isProcessing = false;
 async function processNextJob() {
@@ -310,12 +450,20 @@ async function processNextJob() {
     return;
   }
   const { jobId, filePath, outputPath, language, quality, speakerSensitivity, event } = job;
+  trackFile(
+    jobId,
+    filePath,
+    "original"
+    /* ORIGINAL */
+  ).catch(
+    (err) => console.error(`[Queue] Error tracking original file:`, err)
+  );
   console.log(`[Queue] Starting job ${jobId} for file: ${filePath}`);
-  const pythonExec = "python3";
+  const pythonExec = "bash";
   const transcribeScript = path.join(
     process.env.APP_ROOT,
     "python_env",
-    "transcribe.py"
+    "transcribe_wrapper.sh"
   );
   const commandArgs = [
     transcribeScript,
@@ -373,6 +521,14 @@ async function processNextJob() {
         } else {
           const fileContent = fs.readFileSync(outputPath, "utf-8");
           const transcript = JSON.parse(fileContent);
+          trackFile(
+            jobId,
+            outputPath,
+            "transcript"
+            /* TRANSCRIPT */
+          ).catch(
+            (err) => console.error(`[Queue] Error tracking transcript file:`, err)
+          );
           console.log(`[Queue] Parsed transcript for job ${jobId}`);
           event.sender.send("job-complete", { jobId, outputPath, transcript });
         }
@@ -395,8 +551,8 @@ ipcMain.handle("process-with-gemini", async (_event, { jobId, transcriptPath, ap
       throw new Error("Gemini API key was not provided");
     }
     const geminiOutputPath = transcriptPath.replace(".json", "_gemini.json");
-    const pythonExec = "python3";
-    const geminiScript = path.join(process.env.APP_ROOT, "python_env", "gemini_process.py");
+    const pythonExec = "bash";
+    const geminiScript = path.join(process.env.APP_ROOT, "python_env", "gemini_wrapper.sh");
     return new Promise((resolve, reject) => {
       const proc = spawn(pythonExec, [
         geminiScript,
@@ -431,6 +587,14 @@ ipcMain.handle("process-with-gemini", async (_event, { jobId, transcriptPath, ap
         }
         try {
           const processedContent = fs.readFileSync(geminiOutputPath, "utf-8");
+          trackFile(
+            jobId,
+            geminiOutputPath,
+            "gemini"
+            /* GEMINI */
+          ).catch(
+            (err) => console.error(`[Gemini] Error tracking Gemini file:`, err)
+          );
           const processedTranscript = JSON.parse(processedContent);
           resolve({ success: true, transcript: processedTranscript });
         } catch (err) {
@@ -453,8 +617,10 @@ ipcMain.on("start-job", (event, { jobId, filePath, outputPath, language, quality
     language,
     quality,
     speakerSensitivity,
-    event
+    event,
     // Pass the event object to send replies later
+    associatedFiles: []
+    // Initialize empty array for file tracking
   });
   console.log(`[Queue] Job ${jobId} added. Queue size: ${jobQueue.length}`);
   processNextJob();

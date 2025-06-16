@@ -91,8 +91,12 @@ function transcodeToMp3(inputPath: string, outputPath: string): Promise<void> {
 
 // IPC handlers
 // Handler for audio trimming
-ipcMain.handle('trim-audio', async (_event, { inputPath, outputPath, start, end }) => {
+ipcMain.handle('trim-audio', async (_event, { inputPath, outputPath, start, end, jobId }) => {
   try {
+// Track the trimmed audio file if jobId is provided
+    if (jobId) {
+      await trackFile(jobId, outputPath, FileType.TRIMMED);
+    }
     await trimAudio(inputPath, outputPath, start, end);
     return { success: true, outputPath };
   } catch (error) {
@@ -105,8 +109,12 @@ ipcMain.handle('trim-audio', async (_event, { inputPath, outputPath, start, end 
 });
 
 // Handler for transcoding
-ipcMain.handle('transcode-to-mp3', async (_event, { inputPath, outputPath }) => {
+ipcMain.handle('transcode-to-mp3', async (_event, { inputPath, outputPath, jobId }) => {
   try {
+// Track the converted MP3 file if jobId is provided
+    if (jobId) {
+      await trackFile(jobId, outputPath, FileType.CONVERTED);
+    }
     await transcodeToMp3(inputPath, outputPath);
     return { success: true, outputPath };
   } catch (error: unknown) {
@@ -244,6 +252,69 @@ ipcMain.handle('file-exists', async (_event, filePath) => {
   } catch {
     return false;
   }
+// Handle job file cleanup
+ipcMain.handle('cleanup-job-files', async (_event, jobId: string) => {
+  console.log(`[Main] Cleanup request for job: ${jobId}`);
+  try {
+    const result = await cleanupJobFiles(jobId);
+    return result;
+  } catch (error) {
+    console.error(`[Main] Error during job cleanup:`, error);
+    return {
+      success: false,
+      deletedFiles: [],
+      errors: [error instanceof Error ? error.message : 'Unknown error occurred']
+    };
+  }
+});
+
+// Handle cleanup of all files
+ipcMain.handle('cleanup-all-files', async (_event) => {
+  console.log(`[Main] Cleanup request for all jobs`);
+  try {
+    const result = await cleanupAllFiles();
+    return result;
+  } catch (error) {
+    console.error(`[Main] Error during global cleanup:`, error);
+    return {
+      success: false,
+      totalDeleted: 0,
+      errors: [error instanceof Error ? error.message : 'Unknown error occurred']
+    };
+  }
+});
+
+// Handle getting file statistics
+ipcMain.handle('get-file-stats', async (_event, jobId?: string) => {
+  console.log(`[Main] File stats request for job: ${jobId || 'all'}`);
+  try {
+    if (jobId) {
+      const files = jobFileRegistry.get(jobId) || [];
+      const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
+      return {
+        fileCount: files.length,
+        totalSize,
+        files: files.map(f => ({ path: f.path, type: f.type, size: f.size }))
+      };
+    } else {
+      let totalFiles = 0;
+      let totalSize = 0;
+      const jobStats: Record<string, any> = {};
+      
+      for (const [id, files] of jobFileRegistry.entries()) {
+        const jobSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
+        totalFiles += files.length;
+        totalSize += jobSize;
+        jobStats[id] = { fileCount: files.length, totalSize: jobSize };
+      }
+      
+      return { totalFiles, totalSize, jobStats };
+    }
+  } catch (error) {
+    console.error(`[Main] Error getting file stats:`, error);
+    return { error: error instanceof Error ? error.message : 'Unknown error occurred' };
+  }
+});
 });
 
 }
@@ -357,7 +428,7 @@ app.whenReady().then(() => {
 
   const sdkFlagPath = path.join(process.env.APP_ROOT!, '.sdk_installed'); // Added non-null assertion
   if (!fs.existsSync(sdkFlagPath)) {
-    const pythonExec = 'python3'; // Added non-null assertion
+    const pythonExec = 'bash'; // Added non-null assertion
     const bootstrapScript = path.join(
       process.env.APP_ROOT!, // Added non-null assertion
       'python_env',
@@ -384,6 +455,112 @@ app.whenReady().then(() => {
 });
 
 
+// File types for cleanup tracking
+enum FileType {
+  ORIGINAL = 'original',
+  CONVERTED = 'converted',
+  TRANSCRIPT = 'transcript',
+  GEMINI = 'gemini',
+  TRIMMED = 'trimmed'
+}
+
+// File tracking information
+interface TrackedFile {
+  path: string;
+  type: FileType;
+  createdAt: number;
+  size?: number;
+}
+
+// Job file registry - keeps track of all files associated with jobs
+// File tracking utilities
+async function trackFile(jobId: string, filePath: string, type: FileType): Promise<void> {
+  console.log(`[FileTracker] Tracking ${type} file for job ${jobId}: ${filePath}`);
+  
+  try {
+    const stats = await fs.promises.stat(filePath);
+    const trackedFile: TrackedFile = {
+      path: filePath,
+      type,
+      createdAt: Date.now(),
+      size: stats.size
+    };
+
+    // Add to job registry
+    if (!jobFileRegistry.has(jobId)) {
+      jobFileRegistry.set(jobId, []);
+    }
+    jobFileRegistry.get(jobId)!.push(trackedFile);
+    
+    console.log(`[FileTracker] Successfully tracked ${type} file: ${filePath} (${stats.size} bytes)`);
+  } catch (error) {
+    console.error(`[FileTracker] Error tracking file ${filePath}:`, error);
+  }
+}
+
+async function cleanupJobFiles(jobId: string): Promise<{ success: boolean; deletedFiles: string[]; errors: string[] }> {
+  console.log(`[FileCleanup] Starting cleanup for job ${jobId}`);
+  
+  const deletedFiles: string[] = [];
+  const errors: string[] = [];
+  const trackedFiles = jobFileRegistry.get(jobId) || [];
+
+  for (const file of trackedFiles) {
+    // Never delete original files, only temporary/converted files
+    if (file.type === FileType.ORIGINAL) {
+      console.log(`[FileCleanup] Skipping original file: ${file.path}`);
+      continue;
+    }
+
+    try {
+      // Check if file exists before attempting deletion
+      if (await fs.promises.access(file.path).then(() => true).catch(() => false)) {
+        await fs.promises.unlink(file.path);
+        deletedFiles.push(file.path);
+        console.log(`[FileCleanup] Deleted ${file.type} file: ${file.path}`);
+      } else {
+        console.log(`[FileCleanup] File already deleted or doesn't exist: ${file.path}`);
+      }
+    } catch (error) {
+      const errorMsg = `Failed to delete ${file.path}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      errors.push(errorMsg);
+      console.error(`[FileCleanup] ${errorMsg}`);
+    }
+  }
+
+  // Remove from registry
+  jobFileRegistry.delete(jobId);
+  
+  console.log(`[FileCleanup] Cleanup complete for job ${jobId}. Deleted: ${deletedFiles.length}, Errors: ${errors.length}`);
+  
+  return {
+    success: errors.length === 0,
+    deletedFiles,
+    errors
+  };
+}
+
+async function cleanupAllFiles(): Promise<{ success: boolean; totalDeleted: number; errors: string[] }> {
+  console.log(`[FileCleanup] Starting cleanup for all jobs`);
+  
+  let totalDeleted = 0;
+  const allErrors: string[] = [];
+  
+  for (const jobId of jobFileRegistry.keys()) {
+    const result = await cleanupJobFiles(jobId);
+    totalDeleted += result.deletedFiles.length;
+    allErrors.push(...result.errors);
+  }
+  
+  console.log(`[FileCleanup] Global cleanup complete. Total deleted: ${totalDeleted}, Total errors: ${allErrors.length}`);
+  
+  return {
+    success: allErrors.length === 0,
+    totalDeleted,
+    errors: allErrors
+  };
+}
+const jobFileRegistry = new Map<string, TrackedFile[]>();
 // Job Queue for sequential processing
 interface TranscriptionJob {
   jobId: string;
@@ -392,6 +569,7 @@ interface TranscriptionJob {
   language?: string;
   quality?: string;
   speakerSensitivity?: number;
+associatedFiles: TrackedFile[]; // Track all files created for this job
   event: Electron.IpcMainEvent; // To send replies back
 }
 
@@ -412,13 +590,17 @@ async function processNextJob() {
   }
 
   const { jobId, filePath, outputPath, language, quality, speakerSensitivity, event } = job;
+// Track the original file
+  trackFile(jobId, filePath, FileType.ORIGINAL).catch(err => 
+    console.error(`[Queue] Error tracking original file:`, err)
+  );
   console.log(`[Queue] Starting job ${jobId} for file: ${filePath}`);
 
-  const pythonExec = 'python3';
+  const pythonExec = 'bash';
   const transcribeScript = path.join(
     process.env.APP_ROOT!,
     'python_env',
-    'transcribe.py'
+    'transcribe_wrapper.sh'
   );
 
   const commandArgs = [
@@ -485,6 +667,10 @@ async function processNextJob() {
         } else {
           const fileContent = fs.readFileSync(outputPath, 'utf-8');
           const transcript = JSON.parse(fileContent);
+// Track the transcript file
+          trackFile(jobId, outputPath, FileType.TRANSCRIPT).catch(err => 
+            console.error(`[Queue] Error tracking transcript file:`, err)
+          );
           console.log(`[Queue] Parsed transcript for job ${jobId}`);
           event.sender.send('job-complete', { jobId, outputPath, transcript });
         }
@@ -513,8 +699,8 @@ ipcMain.handle('process-with-gemini', async (_event, { jobId, transcriptPath, ap
     }
 
     const geminiOutputPath = transcriptPath.replace('.json', '_gemini.json');
-    const pythonExec = 'python3';
-    const geminiScript = path.join(process.env.APP_ROOT!, 'python_env', 'gemini_process.py');
+    const pythonExec = 'bash';
+    const geminiScript = path.join(process.env.APP_ROOT!, 'python_env', 'gemini_wrapper.sh');
 
     return new Promise((resolve, reject) => {
       const proc = spawn(pythonExec, [
@@ -554,6 +740,10 @@ ipcMain.handle('process-with-gemini', async (_event, { jobId, transcriptPath, ap
         try {
           // Read and return the processed transcript
           const processedContent = fs.readFileSync(geminiOutputPath, 'utf-8');
+// Track the Gemini processed file
+          trackFile(jobId, geminiOutputPath, FileType.GEMINI).catch(err => 
+            console.error(`[Gemini] Error tracking Gemini file:`, err)
+          );
           const processedTranscript = JSON.parse(processedContent);
           resolve({ success: true, transcript: processedTranscript });
         } catch (err) {
@@ -580,7 +770,8 @@ ipcMain.on('start-job', (event, { jobId, filePath, outputPath, language, quality
     language,
     quality,
     speakerSensitivity,
-    event // Pass the event object to send replies later
+    event, // Pass the event object to send replies later
+    associatedFiles: [] // Initialize empty array for file tracking
   });
 
   console.log(`[Queue] Job ${jobId} added. Queue size: ${jobQueue.length}`);

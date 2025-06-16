@@ -11,37 +11,57 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.off(channel, ...omit)
   },
   send(...args: Parameters<typeof ipcRenderer.send>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.send(channel, ...omit)
+    const [channel, ...data] = args
+    return ipcRenderer.send(channel, ...data)
   },
   invoke(...args: Parameters<typeof ipcRenderer.invoke>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.invoke(channel, ...omit)
+    const [channel, ...data] = args
+    return ipcRenderer.invoke(channel, ...data)
   },
+
   // Function to check if a file exists
   fileExists: (filePath: string): Promise<boolean> => {
     return ipcRenderer.invoke('file-exists', filePath)
   },
+
   // Function to resolve file paths to URLs
   resolveFileUrl: (filePath: string): Promise<string> => {
     return ipcRenderer.invoke('resolve-file-url', filePath)
   },
+
   // Function to transcode audio files to MP3
-  transcodeToMp3: (params: { inputPath: string; outputPath: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> => {
+  transcodeToMp3: (params: { inputPath: string; outputPath: string; jobId?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> => {
     return ipcRenderer.invoke('transcode-to-mp3', params)
   },
+
   // Function to delete a file
   deleteFile: (filePath: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('delete-file', filePath)
   },
-  trimAudio: (params: { inputPath: string; outputPath: string; start: number; end: number }): Promise<{ success: boolean; outputPath?: string; error?: string }> => {
+
+  trimAudio: (params: { inputPath: string; outputPath: string; start: number; end: number; jobId?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> => {
     return ipcRenderer.invoke('trim-audio', params)
   },
+
   // Clipboard functions
   writeToClipboard: (text: string): Promise<void> => {
     return ipcRenderer.invoke('write-to-clipboard', text)
   },
+
   readFromClipboard: (): Promise<string> => {
     return ipcRenderer.invoke('read-from-clipboard')
   },
+
+  // File cleanup functions
+  cleanupJobFiles: (jobId: string): Promise<{ success: boolean; deletedFiles: string[]; errors: string[] }> => {
+    return ipcRenderer.invoke('cleanup-job-files', jobId)
+  },
+
+  cleanupAllFiles: (): Promise<{ success: boolean; totalDeleted: number; errors: string[] }> => {
+    return ipcRenderer.invoke('cleanup-all-files')
+  },
+
+  getFileStats: (jobId?: string): Promise<any> => {
+    return ipcRenderer.invoke('get-file-stats', jobId)
+  }
 })

@@ -166,11 +166,13 @@ def main():
                     initial_prompt="The following is a transcription of a conversation.",
                     vad_filter=True,  # Enable voice activity detection
                     vad_parameters={
-                        "min_silence_duration_ms": int(500 * (2 - args.speaker_sensitivity)),  # Adjust silence threshold based on sensitivity
-                        "speech_pad_ms": int(1000 * (1 - args.speaker_sensitivity))  # Adjust padding based on sensitivity
+                        "min_silence_duration_ms": max(100, int(500 * (2 - args.speaker_sensitivity))),  # Ensure minimum silence duration
+                        "speech_pad_ms": max(50, int(1000 * (1 - args.speaker_sensitivity)))  # Ensure minimum padding
                     },
                     temperature=0.0,  # Reduce randomness
-                    best_of=1  # Use only top result
+                    best_of=1,  # Use only top result
+                    repetition_penalty=1.1,  # Add repetition penalty to reduce repeated segments
+                    no_repeat_ngram_size=2  # Prevent repeating n-grams
                 )
             except Exception as e:
                 print(f"Transcription error details: {str(e)}", file=sys.stderr)
@@ -186,14 +188,23 @@ def main():
         print(f"Error during transcription: {str(e)}", file=sys.stderr)
         sys.exit(1)
     
-    # Convert segments to our format
+    # Convert segments to our format and filter duplicates
+    seen_segments = set()
     for segment in segments:
-        transcript_segments.append({
-            "start": segment.start,
-            "end": segment.end,
-            "speaker": "Speaker",
-            "text": segment.text
-        })
+        # Create a unique identifier for the segment based on timing and text
+        segment_id = (round(segment.start, 2), round(segment.end, 2), segment.text.strip())
+        
+        # Skip if we've already seen this exact segment
+        if segment_id not in seen_segments:
+            seen_segments.add(segment_id)
+            transcript_segments.append({
+                "start": segment.start,
+                "end": segment.end,
+                "speaker": "Speaker",
+                "text": segment.text.strip()
+            })
+        else:
+            print(f"[Filter] Skipping duplicate segment: {segment.text[:50]}...", file=sys.stderr)
 
     try:
         import tempfile
